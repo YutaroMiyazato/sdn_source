@@ -23,6 +23,20 @@ from ryu.lib.packet import ether_types
 from ryu import utils
 import time
 
+import peewee
+import MySQLdb
+
+db = peewee.MySQLDatabase("ryu_db", host="mat.ns.ie.u-ryukyu.ac.jp", port=3306, user="root", passwd="")
+
+class Topology(peewee.Model):
+    id = peewee.IntegerField()
+    dport1 = peewee.CharField()
+    dport2 = peewee.CharField()
+    delay = peewee.FloatField()
+    judge = peewee.CharField()
+
+    class Meta:
+        database = db
 
 class Switch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -137,4 +151,21 @@ class Switch13(app_manager.RyuApp):
     
     def handle_lldp(self, datapath, port, pkt_lldp):
         timestamp_diff = time.time() - pkt_lldp.tlvs[3].timestamp
-        print "datapath:", datapath.id, "port:", port, "datapath:", pkt_lldp.tlvs[0].chassis_id, "port:", pkt_lldp.tlvs[1].port_id, "delay", timestamp_diff 
+
+        #foo = Hoge.create(id=0,dport1='1-1',dport2='2-1',delay=0.5,judge='S')
+        #foo.save()
+
+        print "datapath:", datapath.id, "port:", port, "datapath:", pkt_lldp.tlvs[0].chassis_id, "port:", pkt_lldp.tlvs[1].port_id, "delay", timestamp_diff
+
+        if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
+            dport1 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+            dport2 = str(datapath.id) + "-" + str(port)
+            print dport1 + " , " + dport2
+            foo = Topology.create(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
+            foo.save()
+        else:
+            dport1 = str(datapath.id) + "-" + str(port)
+            dport2 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+            print dport1 + " , " + dport2
+            foo = Topology.create(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
+            foo.save()
