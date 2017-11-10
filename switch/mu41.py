@@ -23,6 +23,7 @@ from ryu.lib.packet import ether_types
 from ryu import utils
 import time
 
+# <--- db declaration
 import peewee
 import MySQLdb
 
@@ -37,6 +38,7 @@ class Topology(peewee.Model):
 
     class Meta:
         database = db
+# --->
 
 class Switch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -151,21 +153,42 @@ class Switch13(app_manager.RyuApp):
     
     def handle_lldp(self, datapath, port, pkt_lldp):
         timestamp_diff = time.time() - pkt_lldp.tlvs[3].timestamp
-
-        #foo = Hoge.create(id=0,dport1='1-1',dport2='2-1',delay=0.5,judge='S')
-        #foo.save()
-
         print "datapath:", datapath.id, "port:", port, "datapath:", pkt_lldp.tlvs[0].chassis_id, "port:", pkt_lldp.tlvs[1].port_id, "delay", timestamp_diff
 
-        if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
-            dport1 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
-            dport2 = str(datapath.id) + "-" + str(port)
-            print dport1 + " , " + dport2
-            foo = Topology.create(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
-            foo.save()
-        else:
-            dport1 = str(datapath.id) + "-" + str(port)
-            dport2 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
-            print dport1 + " , " + dport2
-            foo = Topology.create(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
-            foo.save()
+
+        # <--- db select
+        if datapath.id is not None:
+
+            if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
+                sid1 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+                sid2 = str(datapath.id) + "-" + str(port)
+            else:
+                sid1 = str(datapath.id) + "-" + str(port)
+                sid2 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+            
+            print sid1 + " , " + sid2
+            hoge = Topology.select().where((Topology.dport1 == sid1) & (Topology.dport2 == sid2)) 
+            if hoge.exists():
+                print "update"
+                # <--- db update
+                if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
+                    topo = Topology.update(delay=timestamp_diff).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
+                    topo.execute()
+                else:
+                    topo = Topology.update(delay=timestamp_diff).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
+                    topo.execute()
+                # db update --->
+            else:
+                # <--- db insert
+                print "insert"
+                if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
+                    dport1 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+                    dport2 = str(datapath.id) + "-" + str(port)
+                    topo = Topology.insert(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
+                    topo.execute()
+                else:
+                    dport1 = str(datapath.id) + "-" + str(port)
+                    dport2 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+                    topo = Topology.insert(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
+                    topo.execute()
+                # db insert --->
