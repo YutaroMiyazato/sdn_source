@@ -38,6 +38,7 @@ class Topology(peewee.Model):
 
     class Meta:
         database = db
+
 # --->
 
 class Switch13(app_manager.RyuApp):
@@ -156,9 +157,8 @@ class Switch13(app_manager.RyuApp):
         print "datapath:", datapath.id, "port:", port, "datapath:", pkt_lldp.tlvs[0].chassis_id, "port:", pkt_lldp.tlvs[1].port_id, "delay", timestamp_diff
 
 
-        # <--- db select
+        # <--- db 
         if datapath.id is not None:
-
             if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
                 sid1 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
                 sid2 = str(datapath.id) + "-" + str(port)
@@ -171,24 +171,12 @@ class Switch13(app_manager.RyuApp):
             if hoge.exists():
                 print "update"
                 # <--- db update
-                if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
-                    topo = Topology.update(delay=timestamp_diff).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
-                    topo.execute()
-                else:
-                    topo = Topology.update(delay=timestamp_diff).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
-                    topo.execute()
+                topo = Topology.update(delay=timestamp_diff).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
+                topo.execute()
                 # db update --->
             else:
                 # <--- db insert
                 print "insert"
-                if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
-                    dport1 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
-                    dport2 = str(datapath.id) + "-" + str(port)
-                    topo = Topology.insert(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
-                    topo.execute()
-                else:
-                    dport1 = str(datapath.id) + "-" + str(port)
-                    dport2 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
-                    topo = Topology.insert(dport1=dport1,dport2=dport2,delay=timestamp_diff,judge='S')
-                    topo.execute()
+                topo = Topology.insert(dport1=sid1,dport2=sid2,delay=timestamp_diff,judge='S')
+                topo.execute()
                 # db insert --->
