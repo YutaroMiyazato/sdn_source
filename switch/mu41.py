@@ -35,6 +35,7 @@ class Topology(peewee.Model):
     dport2 = peewee.CharField()
     delay = peewee.FloatField()
     judge = peewee.CharField()
+    updated = peewee.IntegerField()
 
     class Meta:
         database = db
@@ -167,16 +168,20 @@ class Switch13(app_manager.RyuApp):
                 sid2 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
             
             print sid1 + " , " + sid2
-            hoge = Topology.select().where((Topology.dport1 == sid1) & (Topology.dport2 == sid2)) 
-            if hoge.exists():
+            topo = Topology.select().where((Topology.dport1 == sid1) & (Topology.dport2 == sid2)) 
+            if topo.exists():
                 print "update"
                 # <--- db update
-                topo = Topology.update(delay=timestamp_diff).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
+                topo = Topology.update(delay=timestamp_diff,updated=time.time()).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
                 topo.execute()
                 # db update --->
             else:
                 # <--- db insert
                 print "insert"
-                topo = Topology.insert(dport1=sid1,dport2=sid2,delay=timestamp_diff,judge='S')
+                topo = Topology.insert(dport1=sid1,dport2=sid2,delay=timestamp_diff,judge='S',updated=time.time())
                 topo.execute()
                 # db insert --->
+            
+        # <--- db delete
+        Topology.delete().where((time.time() - Topology.updated) > 600).execute()
+        # ---> db delete
