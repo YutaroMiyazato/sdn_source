@@ -22,6 +22,7 @@ from ryu.lib.packet import ether_types
 
 from ryu import utils
 import time
+import numpy as np
 
 # <--- db declaration
 import peewee
@@ -37,10 +38,12 @@ class Topology(peewee.Model):
     judge = peewee.CharField()
     updated = peewee.IntegerField()
 
+
     class Meta:
         database = db
 
 # --->
+
 
 class Switch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -50,6 +53,8 @@ class Switch13(app_manager.RyuApp):
         # initialize mac address table.
         self.mac_to_port = {}
         self.datapaths = []
+        self.dport_id = []
+        self.dport = np.empty((0,2), int)
         self.hw_addr = '88:d7:f6:7a:34:90'
         self.ip_addr = '10.50.0.100'
         self.vlan_type=ether.ETH_TYPE_8021Q
@@ -75,6 +80,9 @@ class Switch13(app_manager.RyuApp):
     
     def lldp_loop(self):
         while True:
+            self.insert_host()
+            self.dport = np.empty((0,2), int)
+            self.dport_id = []
             for dp in self.datapaths:
                 self.send_port_desc_stats_request(dp)
             hub.sleep(10)
@@ -86,16 +94,29 @@ class Switch13(app_manager.RyuApp):
         req = parser.OFPPortDescStatsRequest(datapath, 0, ofproto.OFPP_ANY)
         datapath.send_msg(req)
 
+    # add flow
     def add_flow(self, datapath, priority, match, actions):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
  
-        # construct flow_mod message and send it.
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
                                              actions)]
         mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
                                 match=match, instructions=inst)
         datapath.send_msg(mod)
+    
+    def del_flow(self, vlan):
+        for dp in self.datapaths: 
+            ofproto = dp.ofproto
+            parser = dp.ofproto_parser
+
+            match = parser.OFPMatch(vlan_vid=(int(vlan) | ofproto.OFPVID_PRESENT))
+
+            # construct flow_mod message and send it.
+            inst = []
+            mod = parser.OFPFlowMod(datapath=dp, priority=1,
+                                command=ofproto.OFPFC_DELETE, out_port=ofproto.OFPP_ANY, out_group=ofproto.OFPG_ANY, match=match, instructions=inst)
+            dp.send_msg(mod)
 
     @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, MAIN_DISPATCHER)
     def port_desc_stats_reply_handler(self, ev):
@@ -105,16 +126,15 @@ class Switch13(app_manager.RyuApp):
         
         for stat in ev.msg.body:
             if stat.port_no < ofproto.OFPP_MAX:
-                timestamp = time.time()
-                print "datapath:", datapath.id
-                print "prot:", stat.port_no
-                print "hard:", stat.hw_addr
-                self.send_lldp_packet(datapath, stat.port_no, stat.hw_addr, timestamp)
+                self.dport = np.append(self.dport, np.array([[datapath.id, stat.port_no]]), axis=0)
+                self.send_lldp_packet(datapath, stat.port_no, stat.hw_addr)
  
     
-    def send_lldp_packet (self, datapath, port_no, hw_addr, timestamp):
+    def send_lldp_packet (self, datapath, port_no, hw_addr):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
+
+        timestamp = time.time()
 
         pkt = packet.Packet()
         pkt.add_protocol(ethernet.ethernet(ethertype=self.lldp_type, src=hw_addr, dst=lldp.LLDP_MAC_NEAREST_BRIDGE))
@@ -151,12 +171,11 @@ class Switch13(app_manager.RyuApp):
  
         pkt_lldp = pkt.get_protocol(lldp.lldp)
         if pkt_lldp:
+            self.search_host(datapath, port)
             self.handle_lldp(datapath, port, pkt_lldp)
     
     def handle_lldp(self, datapath, port, pkt_lldp):
         timestamp_diff = time.time() - pkt_lldp.tlvs[3].timestamp
-        print "datapath:", datapath.id, "port:", port, "datapath:", pkt_lldp.tlvs[0].chassis_id, "port:", pkt_lldp.tlvs[1].port_id, "delay", timestamp_diff
-
 
         # <--- db 
         if datapath.id is not None:
@@ -183,5 +202,36 @@ class Switch13(app_manager.RyuApp):
                 # db insert --->
             
         # <--- db delete
+        Topology.delete().where((time.time() - Topology.updated) > 600).execute()
+        # ---> db delete
+
+    def search_host(self, datapath, port):
+        self.dport = np.delete(self.dport, np.where((self.dport[:,0]==datapath.id) & (self.dport[:,1]==port)), 0)
+    
+    def insert_host(self):
+        for i in range(len(self.dport)):
+            sid = str(self.dport[i][0]) + "-" + str(self.dport[i][1])
+            self.dport_id.append(sid)
+        self.dport_id.sort()
+        print "tests"
+        print self.dport_id
+        for j in range(len(self.dport_id)-1):
+            print self.dport_id[0] + " , " + self.dport_id[j+1]
+            hoge = Topology.select().where((Topology.dport1 == self.dport_id[0]) & (Topology.dport2 == self.dport_id[j+1]))
+            
+            if hoge.exists():
+                print "no insert"
+                # <--- db update
+                topo = Topology.update(updated=time.time()).where((Topology.dport1 == self.dport_id[0]) & (Topology.dport2 == self.dport_id[1]))
+                topo.execute()
+                # db update --->
+            else:
+                # <--- db insert
+                print "insert"
+                topo = Topology.insert(dport1=self.dport_id[0],dport2=self.dport_id[j+1],judge='H', updated=time.time())
+                topo.execute()
+                # db insert --->
+            
+            # <--- db delete
         Topology.delete().where((time.time() - Topology.updated) > 600).execute()
         # ---> db delete

@@ -1,4 +1,7 @@
 import time
+import struct
+import logging
+from ryu.lib.mac import haddr_to_str
 
 from ryu.base import app_manager
 
@@ -22,7 +25,29 @@ from ryu.lib.packet import ether_types
 
 from ryu import utils
 import time
+import numpy as np
 
+# <--- db declaration
+import peewee
+import MySQLdb
+
+db = peewee.MySQLDatabase("ryu_db", host="mat.ns.ie.u-ryukyu.ac.jp", port=3306, user="root", passwd="")
+
+class Topology(peewee.Model):
+    id = peewee.IntegerField()
+    dport1 = peewee.CharField()
+    dport2 = peewee.CharField()
+    delay = peewee.FloatField()
+    judge = peewee.CharField()
+    updated = peewee.IntegerField()
+
+
+    class Meta:
+        database = db
+
+# --->
+
+LOG = logging.getLogger(__name__)
 
 class Switch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -32,12 +57,14 @@ class Switch13(app_manager.RyuApp):
         # initialize mac address table.
         self.mac_to_port = {}
         self.datapaths = []
+        self.dport_id = []
+        self.hostname = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
+        self.dport = np.empty((0,2), int)
         self.hw_addr = '88:d7:f6:7a:34:90'
         self.ip_addr = '10.50.0.100'
         self.vlan_type=ether.ETH_TYPE_8021Q
         self.ipv4_type=ether.ETH_TYPE_IP
         self.lldp_type=ether.ETH_TYPE_LLDP
-        self.cfm_type=ether.ETH_TYPE_CFM
         self.lldp_thread = hub.spawn(self.lldp_loop)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -48,15 +75,18 @@ class Switch13(app_manager.RyuApp):
 
         self.datapaths.append(datapath)
 
-        match = parser.OFPMatch()
+        match = parser.OFPMatch(eth_type=self.lldp_type)
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,ofproto.OFPCML_NO_BUFFER)]
 
-        self.add_flow(datapath, 0, match, actions)
+        self.add_flow(datapath, 1, match, actions)
 
         self.send_port_desc_stats_request(datapath)
-    
+
     def lldp_loop(self):
         while True:
+            self.insert_host()
+            self.dport = np.empty((0,2), int)
+            self.dport_id = []
             for dp in self.datapaths:
                 self.send_port_desc_stats_request(dp)
             hub.sleep(10)
@@ -68,16 +98,42 @@ class Switch13(app_manager.RyuApp):
         req = parser.OFPPortDescStatsRequest(datapath, 0, ofproto.OFPP_ANY)
         datapath.send_msg(req)
 
+    # add flow
     def add_flow(self, datapath, priority, match, actions):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
  
-        # construct flow_mod message and send it.
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
                                              actions)]
         mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
                                 match=match, instructions=inst)
         datapath.send_msg(mod)
+    
+    def del_flow(self, vlan, port1, port2):
+        for dp in self.datapaths:
+                    
+            ofproto = dp.ofproto
+            parser = dp.ofproto_parser
+
+            match = parser.OFPMatch(vlan_vid=(int(vlan) | ofproto.OFPVID_PRESENT))
+
+            inst = []
+            mod = parser.OFPFlowMod(datapath=dp, priority=1,
+                                command=ofproto.OFPFC_DELETE, out_port=ofproto.OFPP_ANY, out_group=ofproto.OFPG_ANY, match=match, instructions=inst)
+            dp.send_msg(mod)
+
+            match = parser.OFPMatch(in_port=int(port1))
+            inst = []
+            mod = parser.OFPFlowMod(datapath=dp, priority=1,
+                                command=ofproto.OFPFC_DELETE, out_port=ofproto.OFPP_ANY, out_group=ofproto.OFPG_ANY, match=match, instructions=inst)
+            dp.send_msg(mod)
+
+            match = parser.OFPMatch(in_port=int(port2))
+            inst = []
+            mod = parser.OFPFlowMod(datapath=dp, priority=1,
+                                command=ofproto.OFPFC_DELETE, out_port=ofproto.OFPP_ANY, out_group=ofproto.OFPG_ANY, match=match, instructions=inst)
+            dp.send_msg(mod)
+
 
     @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, MAIN_DISPATCHER)
     def port_desc_stats_reply_handler(self, ev):
@@ -87,16 +143,15 @@ class Switch13(app_manager.RyuApp):
         
         for stat in ev.msg.body:
             if stat.port_no < ofproto.OFPP_MAX:
-                timestamp = time.time()
-                print "datapath:", datapath.id
-                print "prot:", stat.port_no
-                print "hard:", stat.hw_addr
-                self.send_lldp_packet(datapath, stat.port_no, stat.hw_addr, timestamp)
+                self.dport = np.append(self.dport, np.array([[datapath.id, stat.port_no]]), axis=0)
+                self.send_lldp_packet(datapath, stat.port_no, stat.hw_addr)
  
     
-    def send_lldp_packet (self, datapath, port_no, hw_addr, timestamp):
+    def send_lldp_packet (self, datapath, port_no, hw_addr):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
+
+        timestamp = time.time()
 
         pkt = packet.Packet()
         pkt.add_protocol(ethernet.ethernet(ethertype=self.lldp_type, src=hw_addr, dst=lldp.LLDP_MAC_NEAREST_BRIDGE))
@@ -126,6 +181,9 @@ class Switch13(app_manager.RyuApp):
         datapath = msg.datapath
         port = msg.match['in_port']
         pkt = packet.Packet(data=msg.data)
+        dst, src, eth_type = struct.unpack_from('!6s6sH', buffer(msg.data), 0)
+        in_port = msg.match.fields[0].value
+
  
         pkt_ethernet = pkt.get_protocol(ethernet.ethernet)
         if not pkt_ethernet:
@@ -133,8 +191,66 @@ class Switch13(app_manager.RyuApp):
  
         pkt_lldp = pkt.get_protocol(lldp.lldp)
         if pkt_lldp:
+            self.search_host(datapath, port)
             self.handle_lldp(datapath, port, pkt_lldp)
-    
+
     def handle_lldp(self, datapath, port, pkt_lldp):
         timestamp_diff = time.time() - pkt_lldp.tlvs[3].timestamp
-        print "datapath:", datapath.id, "port:", port, "datapath:", pkt_lldp.tlvs[0].chassis_id, "port:", pkt_lldp.tlvs[1].port_id, "delay", timestamp_diff 
+
+        # <--- db 
+        if datapath.id is not None:
+            if int(datapath.id) > int(pkt_lldp.tlvs[0].chassis_id):
+                sid1 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+                sid2 = str(datapath.id) + "-" + str(port)
+            else:
+                sid1 = str(datapath.id) + "-" + str(port)
+                sid2 = str(pkt_lldp.tlvs[0].chassis_id) + "-" + str(pkt_lldp.tlvs[1].port_id)
+            
+            print sid1 + " , " + sid2
+            topo = Topology.select().where((Topology.dport1 == sid1) & (Topology.dport2 == sid2)) 
+            if topo.exists():
+                print "update"
+                # <--- db update
+                topo = Topology.update(delay=timestamp_diff,updated=time.time()).where((Topology.dport1 == sid1) & (Topology.dport2 == sid2))
+                topo.execute()
+                # db update --->
+            else:
+                # <--- db insert
+                print "insert"
+                topo = Topology.insert(dport1=sid1,dport2=sid2,delay=timestamp_diff,judge='S',updated=time.time())
+                topo.execute()
+                # db insert --->
+            
+        # <--- db delete
+        Topology.delete().where((time.time() - Topology.updated) > 20).execute()
+        # ---> db delete
+
+    def search_host(self, datapath, port):
+        self.dport = np.delete(self.dport, np.where((self.dport[:,0]==datapath.id) & (self.dport[:,1]==port)), 0)
+    
+    def insert_host(self):
+        for i in range(len(self.dport)):
+            sid = str(self.dport[i][0]) + "-" + str(self.dport[i][1])
+            self.dport_id.append(sid)
+        self.dport_id.sort()
+
+        for j in range(len(self.dport_id)):
+            print self.dport_id[j]
+            hoge = Topology.select().where(Topology.dport1 == self.dport_id[j])
+            
+            if hoge.exists():
+                print "update"
+                # <--- db update
+                topo = Topology.update(updated=time.time()).where((Topology.dport1 == self.dport_id[j]) & (Topology.dport2 == self.hostname[j]))
+                topo.execute()
+                # db update --->
+            else:
+                # <--- db insert
+                print "insert"
+                topo = Topology.insert(dport1=self.dport_id[j], dport2=self.hostname[j], judge='H', updated=time.time())
+                topo.execute()
+                # db insert --->
+            
+            # <--- db delete
+        Topology.delete().where((time.time() - Topology.updated) > 10).execute()
+        # ---> db delete
